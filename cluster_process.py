@@ -5,6 +5,15 @@ import numpy as np
 # from sklearn.cluster import KMeans
 from utils.kmeans import KMeans
 
+# Try to import GPU K-means
+try:
+    import torch
+    from utils.kmeans_gpu import KMeansGPU
+    USE_GPU = torch.cuda.is_available()
+except ImportError:
+    USE_GPU = False
+    print("⚠️  PyTorch not available, will use CPU K-means")
+
 
 def gen_universal_set(s_size=4):
     base_p1 = [1, 2**(-1), 2**(-5), 0]
@@ -27,7 +36,7 @@ def gen_universal_set(s_size=4):
     return uset_p
 
 
-def solve(name, model_name):
+def solve(name, model_name, use_gpu=True):
     print('cluster {} module'.format(name))
 
     path = "data/{}/{}.pkl".format(model_name, name)
@@ -76,7 +85,18 @@ def solve(name, model_name):
             print("========Channel: {}=========\n".format(channel))
             x_ = x[channel, :].reshape(-1, 1)  # [b*h*w,1]
             for iter in range(iters):
-                kmeans = KMeans(n_clusters=num_clusters)
+                # Use GPU K-means if available and requested
+                if use_gpu and USE_GPU:
+                    kmeans = KMeansGPU(
+                        n_clusters=num_clusters,
+                        max_iter=100,
+                        tol=1e-3,
+                        n_init=1,
+                        device='cuda',
+                        verbose=False
+                    )
+                else:
+                    kmeans = KMeans(n_clusters=num_clusters)
                 kmeans.fit(x_)
                 clusters = kmeans.centers
 
@@ -128,6 +148,32 @@ def solve(name, model_name):
 if __name__ == '__main__':
     import os
     import time
+    import argparse
+    
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Cluster process for quantization parameters')
+    parser.add_argument('--use_gpu', action='store_true', default=True,
+                        help='Use GPU acceleration if available (default: True)')
+    parser.add_argument('--no_gpu', dest='use_gpu', action='store_false',
+                        help='Disable GPU acceleration')
+    args = parser.parse_args()
+    
+    print("=" * 80)
+    print("Cluster Process for Quantization Parameters")
+    print("=" * 80)
+    print()
+    
+    # Check GPU availability
+    if USE_GPU and args.use_gpu:
+        print(f"✅ GPU 可用: {torch.cuda.get_device_name(0)}")
+        print(f"   显存: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print("   使用 GPU 加速的 K-means")
+    elif args.use_gpu:
+        print("⚠️  GPU 不可用，将使用 CPU K-means")
+    else:
+        print("ℹ️  已禁用 GPU，使用 CPU K-means")
+    print()
+    
     process_list = []
     model_name = "edsr_4x_4bit" # if you change the model or bit, it need be modified
     path = "data/"+model_name
@@ -138,7 +184,7 @@ if __name__ == '__main__':
     results = []
     for i in range(0, len(file)):
         results.append(pool.apply_async(solve, args=(
-            file[i].split(".pkl")[0], model_name)))  
+            file[i].split(".pkl")[0], model_name, args.use_gpu)))  
 
     pool.close()
     pool.join()
